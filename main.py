@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
 """
 Arcade Flow Analyzer
-Complete pipeline: Flow Parsing → AI Summary → Image Generation → Markdown Report
+Complete pipeline: Flow Parsing -> AI Summary -> Image Generation -> Markdown Report
 """
 
 import os
@@ -36,7 +35,7 @@ class FlowAnalyzer:
         try:
             summary_generator = AISummaryGenerator()
             summary_result = summary_generator.generate_summary(actions, flow_name)
-            insights = summary_generator.generate_insights(actions)
+            insights = summary_generator.generate_insights(actions, flow_name)
             
             results['summary'] = summary_result
             results['insights'] = insights
@@ -52,7 +51,12 @@ class FlowAnalyzer:
         # Generate Social Media Image
         try:
             image_generator = SocialImageGenerator()
-            image_filename = image_generator.generate_image(actions, flow_name)
+            image_filename = image_generator.generate_image(
+                actions, 
+                flow_name, 
+                summary_result, 
+                insights
+            )
             results['image_filename'] = image_filename
         except Exception as e:
             results['image_filename'] = None
@@ -89,30 +93,47 @@ class FlowAnalyzer:
 
 ---
 
-## 💼 Executive Summary
+## Executive Summary
 
 > {summary.get('executive_summary', 'Executive summary not available')}
 
-## 🔍 Detailed Analysis
+## Detailed Analysis
 
 {summary.get('detailed_analysis', 'Detailed analysis not available')}
 
 ---
 
-## 🎯 Flow Insights
+## Flow Insights
 
 - **Flow Classification:** {insights.get('flow_classification', 'Unknown')}
 - **Completion Rate:** {insights.get('user_behavior_indicators', {}).get('completion_rate', 0)}%
 
-### 📊 Conversion Funnel
-{chr(10).join([f"- **{stage.replace('_', ' ').title()}:** {'✅' if completed else '❌'}" for stage, completed in insights.get('conversion_funnel', {}).items()])}
+### Conversion Funnel"""
+        
+        # Add conversion funnel items
+        conversion_funnel = insights.get('conversion_funnel', {})
+        for stage, completed in conversion_funnel.items():
+            status = "Yes" if completed else "No"
+            stage_name = stage.replace('_', ' ').title()
+            markdown_content += f"\n- **{stage_name}:** {status}"
+        
+        markdown_content += f"""
 
-### 🧠 User Behavior Indicators  
-{chr(10).join([f"- **{behavior.replace('_', ' ').title()}:** {'✅' if present else '❌'}" for behavior, present in insights.get('user_behavior_indicators', {}).items() if isinstance(present, bool)])}
+### User Behavior Indicators"""
+        
+        # Add user behavior indicators
+        user_behaviors = insights.get('user_behavior_indicators', {})
+        for behavior, present in user_behaviors.items():
+            if isinstance(present, bool):
+                status = "Yes" if present else "No"
+                behavior_name = behavior.replace('_', ' ').title()
+                markdown_content += f"\n- **{behavior_name}:** {status}"
+        
+        markdown_content += f"""
 
 ---
 
-## 👤 User Interactions (Step-by-Step)
+## User Interactions (Step-by-Step)
 
 The following actions were performed by the user during this flow:
 
@@ -135,7 +156,7 @@ The following actions were performed by the user during this flow:
             markdown_content += "\n"
         
         # Add social media image
-        markdown_content += "---\n\n## 🎨 Social Media Image\n\n"
+        markdown_content += "---\n\n## Social Media Image\n\n"
         if image_filename and Path(image_filename).exists():
             markdown_content += f"![Social Media Image for {flow_name}]({image_filename})\n\n"
             markdown_content += f"*Generated social media image optimized for sharing across platforms*\n\n"
@@ -145,10 +166,10 @@ The following actions were performed by the user during this flow:
         # Add technical details
         markdown_content += f"""---
 
-## 🔧 Technical Details
+## Technical Details
 
 - **Analysis Tool:** Arcade Flow Analyzer
-- **AI Models Used:** GPT-4 (summary), GPT-Image-1 (image generation)
+- **AI Models Used:** GPT-4.1 (summary), GPT-Image-1 (image generation)
 - **Source Data:** {self.flow_file}
 - **Generated Files:**
   - Report: `{report_filename}`"""
@@ -173,28 +194,23 @@ The following actions were performed by the user during this flow:
 def main():
     """Run the complete flow analysis pipeline"""
     
-    # Check requirements
     if not Path('flow.json').exists():
-        print("❌ Error: flow.json not found in current directory")
+        print("Error: flow.json not found")
         return
     
     if not os.getenv('OPENAI_API_KEY'):
-        print("❌ Error: OPENAI_API_KEY environment variable not set")
+        print("Error: OPENAI_API_KEY not set")
         return
     
-    # Run analysis
     analyzer = FlowAnalyzer()
     results = analyzer.analyze()
     
-    # Display results
     if results.get('error'):
-        print(f"❌ Analysis failed: {results['error']}")
+        print(f"Failed: {results['error']}")
     elif results.get('report_filename'):
-        print(f"✅ Analysis complete: {results['report_filename']}")
-        if results.get('image_filename'):
-            print(f"✅ Image generated: {results['image_filename']}")
+        print(f"Complete: {results['report_filename']}")
     else:
-        print("❌ Analysis completed with errors")
+        print("Error occurred")
 
 
 if __name__ == '__main__':

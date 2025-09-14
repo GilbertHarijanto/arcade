@@ -45,7 +45,7 @@ class FlowParser:
         
         step_number = 1
         
-        for step in steps:
+        for step_index, step in enumerate(steps):
             step_type = step.get('type')
             
             if step_type == 'CHAPTER':
@@ -61,11 +61,13 @@ class FlowParser:
                     if (action.action_type == 'search' and typing_events and 
                         len(actions) > 0):
                         # Add typing action
+                        # Extract search term from the next page title if possible
+                        typed_text = self._extract_search_term_from_context(step, self.flow_data['steps'], step_index)
                         typing_action = UserAction(
                             step_number=step_number + 1,
                             action_type='type',
-                            description='Typed "scooter" in the search bar',
-                            element_text='scooter',
+                            description=f'Typed "{typed_text}" in the search bar',
+                            element_text=typed_text,
                             page_title=action.page_title,
                             timestamp=typing_events[0].get('startTimeMs')
                         )
@@ -134,16 +136,16 @@ class FlowParser:
         
         if 'search' in label_lower and 'tap' in label_lower:
             return 'search', 'Clicked on the search bar to start looking for products'
-        elif 'scooter image' in label_lower or 'learn more' in label_lower:
+        elif any(keyword in label_lower for keyword in ['image', 'learn more', 'view details', 'product']):
             return 'select_product', f'Clicked on the "{element_text}" to view product details'
         elif 'color' in label_lower and 'choose' in label_lower:
             return 'select_option', f'Selected "{element_text}" color option'
         elif 'color' in label_lower and 'explore' in label_lower:
             return 'browse_options', f'Explored "{element_text}" color option'
         elif 'add to cart' in label_lower:
-            return 'add_to_cart', 'Clicked "Add to cart" to add the scooter to shopping cart'
-        elif 'decline coverage' in label_lower:
-            return 'decline_option', 'Declined the extended coverage protection plan'
+            return 'add_to_cart', 'Clicked "Add to cart" to add the item to shopping cart'
+        elif 'decline coverage' in label_lower or 'decline' in label_lower:
+            return 'decline_option', 'Declined the additional option or coverage plan'
         elif 'visit your cart' in label_lower or 'cart' in label_lower:
             return 'navigate_cart', 'Clicked on the cart icon to review selected items'
         else:
@@ -162,6 +164,22 @@ class FlowParser:
             return 'click', f'Clicked on "{element_text}"'
         else:
             return 'action', 'Performed an action on the page'
+    
+    def _extract_search_term_from_context(self, current_step, all_steps, current_index):
+        """Extract search term from subsequent page titles or context"""
+        # Look ahead in steps for a page title that contains the search term
+        for i in range(current_index + 1, min(current_index + 3, len(all_steps))):
+            step = all_steps[i]
+            if 'pageContext' in step:
+                page_title = step['pageContext'].get('title', '')
+                # Look for quoted search terms like '"scooter" : Target'
+                import re
+                match = re.search(r'"([^"]+)"\s*:', page_title)
+                if match:
+                    return match.group(1)
+        
+        # Fallback to generic term
+        return "search term"
 
 
 def load_and_parse_flow(file_path: str) -> tuple[List[UserAction], str]:

@@ -58,12 +58,12 @@ Keep the analysis concise but insightful (3-4 paragraphs total). Focus on insigh
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4.1",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_tokens=500,
+                max_completion_tokens=500,
                 temperature=0.3
             )
             
@@ -77,12 +77,12 @@ Keep the analysis concise but insightful (3-4 paragraphs total). Focus on insigh
 Create a concise executive summary (1-2 sentences) that captures the most important business outcome and user behavior insight."""
 
             exec_response = self.client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4.1",
                 messages=[
                     {"role": "system", "content": "You are a business analyst creating executive summaries."},
                     {"role": "user", "content": exec_summary_prompt}
                 ],
-                max_tokens=100,
+                max_completion_tokens=100,
                 temperature=0.2
             )
             
@@ -134,7 +134,7 @@ Create a concise executive summary (1-2 sentences) that captures the most import
         
         return "\n".join(context_lines)
     
-    def generate_insights(self, actions: List[UserAction]) -> dict:
+    def generate_insights(self, actions: List[UserAction], flow_name: str = "Unknown Flow") -> dict:
         """Generate enhanced insights with UX/business focus"""
         
         action_types = {}
@@ -170,6 +170,10 @@ Create a concise executive summary (1-2 sentences) that captures the most import
             "flow_classification": self._classify_flow_type(has_search, has_customization, has_purchase, completed)
         }
         
+        # Ask LLM to extract brand and context information for social media
+        extraction_insights = self._extract_brand_and_context(actions, flow_name)
+        insights.update(extraction_insights)
+        
         return insights
     
     def _classify_flow_type(self, has_search: bool, has_customization: bool, has_purchase: bool, completed: bool) -> str:
@@ -187,3 +191,73 @@ Create a concise executive summary (1-2 sentences) that captures the most import
             return "Product Discovery Flow"
         else:
             return "General Navigation Flow"
+    
+    def _extract_brand_and_context(self, actions: List[UserAction], flow_name: str) -> dict:
+        """Use LLM to extract brand, product type, and task type for social media generation"""
+        
+        action_context = self._build_action_context(actions)
+        
+        extraction_prompt = f"""Analyze this user flow and extract key information for social media content generation.
+
+Flow Title: "{flow_name}"
+
+User Actions:
+{action_context}
+
+Please extract and return ONLY the following information in this exact format:
+
+BRAND: [The main brand/company/platform name, or "Unknown" if not clear]
+PRODUCT_TYPE: [What the user was trying to get/achieve - e.g., "product", "workspace", "dashboard", "meeting setup", "account", etc.]
+TASK_TYPE: [The main task category - e.g., "online shopping", "workspace setup", "analytics", "collaboration", "onboarding", etc.]
+
+Be concise and specific. Focus on what would make sense for social media sharing."""
+
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[
+                    {"role": "system", "content": "You are an expert at extracting key information from user flows for social media content. Be precise and concise."},
+                    {"role": "user", "content": extraction_prompt}
+                ],
+                max_completion_tokens=150,
+                temperature=0.3
+            )
+            
+            extraction_text = response.choices[0].message.content.strip()
+            
+            # Parse the LLM response
+            extracted_info = self._parse_extraction_response(extraction_text)
+            
+            return extracted_info
+            
+        except Exception as e:
+            # Fallback to unknown values
+            return {
+                'extracted_brand': 'Unknown',
+                'product_type': 'workflow',
+                'task_type': 'digital workflow'
+            }
+    
+    def _parse_extraction_response(self, response_text: str) -> dict:
+        """Parse the LLM extraction response into structured data"""
+        
+        extracted_brand = "Unknown"
+        product_type = "workflow"
+        task_type = "digital workflow"
+        
+        lines = response_text.split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            if line.startswith('BRAND:'):
+                extracted_brand = line.replace('BRAND:', '').strip()
+            elif line.startswith('PRODUCT_TYPE:'):
+                product_type = line.replace('PRODUCT_TYPE:', '').strip()
+            elif line.startswith('TASK_TYPE:'):
+                task_type = line.replace('TASK_TYPE:', '').strip()
+        
+        return {
+            'extracted_brand': extracted_brand,
+            'product_type': product_type,
+            'task_type': task_type
+        }
