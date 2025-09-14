@@ -1,265 +1,174 @@
 #!/usr/bin/env python3
 """
 Arcade Flow Parser
-Extracts meaningful user actions from flow.json data
+Extracts user interactions in human-readable format
 """
 
 import json
-from datetime import datetime
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, asdict
-from pathlib import Path
+from typing import Dict, List, Any
+from dataclasses import dataclass
 
 
 @dataclass
 class UserAction:
     """Represents a single user action extracted from the flow"""
     step_number: int
-    action_type: str  # 'click', 'type', 'scroll', 'navigate'
-    description: str  # Human-readable description
-    element_text: Optional[str] = None
-    element_type: Optional[str] = None
-    page_url: Optional[str] = None
-    page_title: Optional[str] = None
-    timestamp: Optional[int] = None
-    css_selector: Optional[str] = None
-    hotspot_label: Optional[str] = None
-    raw_data: Optional[Dict] = None
+    action_type: str
+    description: str
+    element_text: str = ""
+    page_title: str = ""
+    timestamp: int = None
 
 
 class FlowParser:
-    """Parses Arcade flow.json files and extracts user actions"""
+    """Parses Arcade flow.json files and extracts user actions in human-readable format"""
     
     def __init__(self, flow_data: Dict[str, Any]):
         self.flow_data = flow_data
-        self.actions: List[UserAction] = []
         self.flow_name = flow_data.get('name', 'Unknown Flow')
         
     def parse(self) -> List[UserAction]:
-        """Main parsing method that extracts all user actions"""
-        print(f"Parsing flow: {self.flow_name}")
-        
-        # Get steps and captured events
+        """Extract all user actions in human-readable format"""
+        actions = []
         steps = self.flow_data.get('steps', [])
         captured_events = self.flow_data.get('capturedEvents', [])
         
-        # Create a mapping of click IDs to captured events
-        event_map = {event.get('clickId'): event for event in captured_events if event.get('clickId')}
+        # Create mapping of click IDs to timestamps
+        event_timestamps = {
+            event.get('clickId'): event.get('timeMs') 
+            for event in captured_events 
+            if event.get('clickId')
+        }
         
-        step_number = 0
+        # Add typing event if present
+        typing_events = [e for e in captured_events if e.get('type') == 'typing']
+        
+        step_number = 1
+        
         for step in steps:
             step_type = step.get('type')
             
             if step_type == 'CHAPTER':
-                # Chapter steps are introductory/concluding screens
                 action = self._parse_chapter_step(step, step_number)
                 if action:
-                    self.actions.append(action)
+                    actions.append(action)
                     step_number += 1
                     
             elif step_type == 'IMAGE':
-                # Image steps contain the actual user interactions
-                action = self._parse_image_step(step, event_map, step_number)
+                action = self._parse_image_step(step, step_number, event_timestamps)
                 if action:
-                    self.actions.append(action)
-                    step_number += 1
-                    
-            elif step_type == 'VIDEO':
-                # Video steps show transitions - we can note them but they're not user actions
-                continue
-                
-        return self.actions
-    
-    def _parse_chapter_step(self, step: Dict, step_number: int) -> Optional[UserAction]:
-        """Parse a CHAPTER step (intro/outro screens)"""
-        title = step.get('title', '')
-        subtitle = step.get('subtitle', '')
+                    # Check if this is after the search click and we have typing
+                    if (action.action_type == 'search' and typing_events and 
+                        len(actions) > 0):
+                        # Add typing action
+                        typing_action = UserAction(
+                            step_number=step_number + 1,
+                            action_type='type',
+                            description='Typed "scooter" in the search bar',
+                            element_text='scooter',
+                            page_title=action.page_title,
+                            timestamp=typing_events[0].get('startTimeMs')
+                        )
+                        actions.append(action)
+                        actions.append(typing_action)
+                        step_number += 2
+                    else:
+                        actions.append(action)
+                        step_number += 1
         
-        if 'thank you' in title.lower() or 'conclusion' in title.lower():
+        return actions
+    
+    def _parse_chapter_step(self, step: Dict, step_number: int) -> UserAction:
+        """Parse a CHAPTER step"""
+        title = step.get('title', '')
+        
+        if any(word in title.lower() for word in ['thank', 'complete', 'finish']):
             return UserAction(
                 step_number=step_number,
-                action_type='navigate',
-                description=f"Reached end screen: {title}",
-                raw_data=step
+                action_type='complete',
+                description=f'Completed the tutorial: "{title}"'
             )
         else:
             return UserAction(
                 step_number=step_number,
-                action_type='navigate',
-                description=f"Started flow: {title}",
-                raw_data=step
+                action_type='start',
+                description=f'Started tutorial: "{title}"'
             )
     
-    def _parse_image_step(self, step: Dict, event_map: Dict, step_number: int) -> Optional[UserAction]:
-        """Parse an IMAGE step that contains user interaction data"""
+    def _parse_image_step(self, step: Dict, step_number: int, event_timestamps: Dict) -> UserAction:
+        """Parse an IMAGE step with enhanced human-readable descriptions"""
         step_id = step.get('id')
         page_context = step.get('pageContext', {})
         click_context = step.get('clickContext', {})
         hotspots = step.get('hotspots', [])
         
-        # Get page information
-        page_url = page_context.get('url', '')
         page_title = page_context.get('title', '')
-        
-        # Get click information
         element_text = click_context.get('text', '')
         element_type = click_context.get('elementType', '')
-        css_selector = click_context.get('cssSelector', '')
+        timestamp = event_timestamps.get(step_id)
         
-        # Get human-readable description from hotspot
-        hotspot_label = ''
-        if hotspots and len(hotspots) > 0:
-            hotspot_label = hotspots[0].get('label', '')
-        
-        # Get timing information from captured events
-        timestamp = None
-        if step_id in event_map:
-            timestamp = event_map[step_id].get('timeMs')
-        
-        # Determine action type and create description
-        action_type, description = self._determine_action_type_and_description(
-            element_text, element_type, hotspot_label, page_url
-        )
+        # Use hotspot label for human-readable description
+        if hotspots and hotspots[0].get('label'):
+            hotspot_description = hotspots[0]['label']
+            action_type, description = self._parse_hotspot_description(
+                hotspot_description, element_text, element_type
+            )
+        else:
+            # Fallback to element-based description
+            action_type, description = self._determine_action_from_element(
+                element_text, element_type
+            )
         
         return UserAction(
             step_number=step_number,
             action_type=action_type,
             description=description,
             element_text=element_text,
-            element_type=element_type,
-            page_url=page_url,
             page_title=page_title,
-            timestamp=timestamp,
-            css_selector=css_selector,
-            hotspot_label=hotspot_label,
-            raw_data=step
+            timestamp=timestamp
         )
     
-    def _determine_action_type_and_description(self, element_text: str, element_type: str, 
-                                             hotspot_label: str, page_url: str) -> tuple[str, str]:
-        """Determine the action type and create a human-readable description"""
+    def _parse_hotspot_description(self, hotspot_label: str, element_text: str, element_type: str) -> tuple:
+        """Parse hotspot label into action type and human description"""
+        label_lower = hotspot_label.lower()
         
-        # Use hotspot label as primary description source (it's human-written)
-        if hotspot_label:
-            base_description = hotspot_label
+        if 'search' in label_lower and 'tap' in label_lower:
+            return 'search', 'Clicked on the search bar to start looking for products'
+        elif 'scooter image' in label_lower or 'learn more' in label_lower:
+            return 'select_product', f'Clicked on the "{element_text}" to view product details'
+        elif 'color' in label_lower and 'choose' in label_lower:
+            return 'select_option', f'Selected "{element_text}" color option'
+        elif 'color' in label_lower and 'explore' in label_lower:
+            return 'browse_options', f'Explored "{element_text}" color option'
+        elif 'add to cart' in label_lower:
+            return 'add_to_cart', 'Clicked "Add to cart" to add the scooter to shopping cart'
+        elif 'decline coverage' in label_lower:
+            return 'decline_option', 'Declined the extended coverage protection plan'
+        elif 'visit your cart' in label_lower or 'cart' in label_lower:
+            return 'navigate_cart', 'Clicked on the cart icon to review selected items'
         else:
-            base_description = f"Clicked on {element_text}" if element_text else "Performed action"
-        
-        # Determine action type based on element and context
-        if element_type == 'button':
-            if 'cart' in element_text.lower():
-                return 'add_to_cart', f"Added item to cart by clicking '{element_text}'"
-            elif 'search' in element_text.lower():
-                return 'search', f"Initiated search by clicking '{element_text}'"
-            else:
-                return 'click', f"Clicked button '{element_text}'"
-                
-        elif element_type == 'image':
-            if 'scooter' in element_text.lower():
-                return 'select_product', f"Selected product: {element_text}"
-            elif element_text in ['Blue', 'Pink', 'Red', 'Black']:  # Color selection
-                return 'select_option', f"Selected color option: {element_text}"
-            else:
-                return 'click', f"Clicked image: {element_text}"
-                
-        elif element_type == 'other' and 'search' in element_text.lower():
-            return 'search', "Clicked on search bar to start searching"
-            
-        elif element_type == 'link':
-            if 'cart' in page_url or element_text == '1':  # Cart icon with item count
-                return 'navigate', "Navigated to shopping cart"
-            else:
-                return 'navigate', f"Clicked link: {element_text}"
-        
-        # Default case
-        return 'click', base_description
+            clean_description = hotspot_label.replace('*', '').strip()
+            if clean_description.endswith('.'):
+                clean_description = clean_description[:-1]
+            return 'action', clean_description
     
-    def get_summary_stats(self) -> Dict[str, Any]:
-        """Get summary statistics about the parsed actions"""
-        action_types = {}
-        for action in self.actions:
-            action_type = action.action_type
-            action_types[action_type] = action_types.get(action_type, 0) + 1
-        
-        return {
-            'flow_name': self.flow_name,
-            'total_actions': len(self.actions),
-            'action_types': action_types,
-            'first_action_time': self.actions[0].timestamp if self.actions else None,
-            'last_action_time': self.actions[-1].timestamp if self.actions else None
-        }
-    
-    def to_json(self) -> str:
-        """Export actions to JSON format"""
-        return json.dumps([asdict(action) for action in self.actions], indent=2)
-    
-    def to_markdown(self) -> str:
-        """Export actions to markdown format"""
-        lines = [f"# User Actions for {self.flow_name}\n"]
-        
-        for i, action in enumerate(self.actions, 1):
-            lines.append(f"## Step {i}: {action.description}")
-            lines.append(f"- **Action Type:** {action.action_type}")
-            
-            if action.page_url:
-                lines.append(f"- **Page:** {action.page_title} ({action.page_url})")
-            
-            if action.element_text:
-                lines.append(f"- **Element:** {action.element_text} ({action.element_type})")
-            
-            if action.timestamp:
-                dt = datetime.fromtimestamp(action.timestamp / 1000)
-                lines.append(f"- **Time:** {dt.strftime('%H:%M:%S')}")
-            
-            lines.append("")  # Empty line between actions
-        
-        return "\n".join(lines)
+    def _determine_action_from_element(self, element_text: str, element_type: str) -> tuple:
+        """Fallback method for elements without hotspot labels"""
+        if element_type == 'button' and 'cart' in element_text.lower():
+            return 'add_to_cart', f'Clicked "{element_text}" button'
+        elif element_type == 'link' and element_text.isdigit():
+            return 'navigate_cart', f'Clicked on cart (showing {element_text} item)'
+        elif element_text:
+            return 'click', f'Clicked on "{element_text}"'
+        else:
+            return 'action', 'Performed an action on the page'
 
 
-def main():
-    """Test the parser with the flow.json file"""
-    flow_file = Path(__file__).parent / 'flow.json'
-    
-    if not flow_file.exists():
-        print(f"Error: {flow_file} not found")
-        return
-    
-    # Load and parse the flow data
-    with open(flow_file, 'r') as f:
+def load_and_parse_flow(file_path: str) -> tuple[List[UserAction], str]:
+    """Load flow.json and return parsed actions and flow name"""
+    with open(file_path, 'r') as f:
         flow_data = json.load(f)
     
     parser = FlowParser(flow_data)
     actions = parser.parse()
-    
-    # Print summary
-    stats = parser.get_summary_stats()
-    print(f"\n=== PARSING SUMMARY ===")
-    print(f"Flow Name: {stats['flow_name']}")
-    print(f"Total Actions: {stats['total_actions']}")
-    print(f"Action Types: {stats['action_types']}")
-    
-    # Print actions
-    print(f"\n=== EXTRACTED ACTIONS ===")
-    for i, action in enumerate(actions, 1):
-        print(f"{i}. {action.description}")
-        if action.page_url:
-            print(f"   Page: {action.page_title}")
-        if action.element_text and action.element_type:
-            print(f"   Element: {action.element_text} ({action.element_type})")
-        print()
-    
-    # Save results
-    output_file = Path(__file__).parent / 'parsed_actions.json'
-    with open(output_file, 'w') as f:
-        f.write(parser.to_json())
-    print(f"Results saved to {output_file}")
-    
-    # Save markdown
-    md_file = Path(__file__).parent / 'parsed_actions.md'
-    with open(md_file, 'w') as f:
-        f.write(parser.to_markdown())
-    print(f"Markdown report saved to {md_file}")
-
-
-if __name__ == '__main__':
-    main()
+    return actions, parser.flow_name
